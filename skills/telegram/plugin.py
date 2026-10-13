@@ -1431,6 +1431,22 @@ def register(api):
                                  "Leave empty to keep the saved proxy. Disable and re-enable the skill after changing it."},
                         {"name": "clear_telegram_proxy", "label": "Clear saved Telegram proxy", "type": "checkbox",
                          "help": "Remove the proxy instead of replacing it."},
+                        {"name": "telegram_api_base_status", "label": "Saved Bot API base (at form load)", "type": "text",
+                         "disabled": True, "default": "https://api.telegram.org"},
+                        {"name": "TELEGRAM_API_BASE", "label": "Bot API base URL", "type": "text",
+                         "placeholder": "https://api.telegram.org",
+                         "help": "Self-hosted telegram-bot-api root, e.g. http://192.168.1.48:8081. "
+                                 "All Bot API calls (polling, sends, downloads, menu) go there. "
+                                 "Leave empty to keep the saved value. Disable and re-enable the skill after changing it."},
+                        {"name": "clear_telegram_api_base", "label": "Clear saved Bot API base", "type": "checkbox",
+                         "help": "Revert to the default https://api.telegram.org."},
+                        {"name": "TELEGRAM_API_FILES_DIR", "label": "Bot API files directory", "type": "text",
+                         "placeholder": "/absolute/path/to/server-file-store",
+                         "help": "Absolute directory of the self-hosted server's file store, shared with this "
+                                 "installation (bind mount). Enables the download disk fallback. Leave empty to keep "
+                                 "the saved value."},
+                        {"name": "clear_telegram_api_files_dir", "label": "Clear saved files directory", "type": "checkbox",
+                         "help": "Disable the disk fallback (HTTP downloads)."},
                         {"name": "TELEGRAM_COMMAND_MODE", "label": "Command mode", "type": "select",
                          "options": [
                              {"value": "full_access", "label": "Full access (default)"},

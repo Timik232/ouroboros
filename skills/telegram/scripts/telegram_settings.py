@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Optional
 
 import httpx
@@ -119,21 +119,35 @@ def validate_telegram_api_base(value: Any) -> str:
 
     Accepts http/https scheme://host[:port] with no path beyond an optional
     trailing slash; anything else is rejected so the token-bearing URL is
-    never silently assembled from a malformed base.
+    never silently assembled from a malformed base. The returned string is a
+    canonical origin (scheme://host[:port]) rebuilt from the parsed URL: no
+    fragment/query ever survives, not even an empty "#" delimiter that would
+    otherwise swallow the /bot<token>/... suffix during string concatenation.
     """
     text = str(value or "").strip().rstrip("/")
     if not text:
         return "https://api.telegram.org"
+    if "#" in text or "?" in text:
+        raise ValueError(
+            "TELEGRAM_API_BASE must be http(s)://host[:port] with no path, "
+            "query, fragment or credentials."
+        )
+    canonical: Optional[str] = None
     try:
         url = httpx.URL(text)
         valid = (
             url.scheme in ("http", "https")
             and bool(url.host)
             and (url.port is None or 0 < url.port <= 65535)
-            and (url.raw_path in (b"/", b"") or url.raw_path == b"")
+            and url.raw_path in (b"/", b"")
             and not url.query and not url.fragment
             and not url.username and not url.password
         )
+        if valid:
+            origin = f"{url.scheme}://{url.host}"
+            if url.port is not None:
+                origin += f":{url.port}"
+            canonical = origin
     except Exception:
         valid = False
     if not valid:
@@ -141,7 +155,7 @@ def validate_telegram_api_base(value: Any) -> str:
             "TELEGRAM_API_BASE must be http(s)://host[:port] with no path, "
             "query, fragment or credentials."
         )
-    return text
+    return canonical or "https://api.telegram.org"
 
 
 def telegram_api_base(state_dir: Path) -> str:
@@ -150,23 +164,47 @@ def telegram_api_base(state_dir: Path) -> str:
 
 
 def validate_telegram_files_dir(value: Any) -> Optional[str]:
-    """Parse TELEGRAM_API_FILES_DIR: an absolute directory path or empty.
+    """Parse TELEGRAM_API_FILES_DIR: a native absolute directory path or empty.
 
-    "/" is rejected: it would make the disk-fallback confinement vacuous (every
-    resolvable path lies under "/"), letting a malicious server response name
-    any readable file for exfiltration into the owner chat.
+    Accepts Unix (``/store``), Windows drive (``C:\\store``) and UNC
+    (``\\\\server\\share\\store``) spellings, with optional trailing slashes.
+    Path-illegal characters are rejected by the pathlib round-trip. The
+    filesystem root of either spelling ("/" or a drive root) is rejected: it
+    would make the disk-fallback confinement vacuous (every resolvable path
+    lies under it), letting a malicious server response name any readable
+    file for exfiltration into the owner chat.
     """
     text = str(value or "").strip()
     if not text:
         return None
-    if not text.startswith("/"):
-        raise ValueError("TELEGRAM_API_FILES_DIR must be an absolute directory path.")
-    resolved = text.rstrip("/") or "/"
-    if resolved == "/":
+    # Native absolute spellings: POSIX "/", drive "C:/", UNC "\\\\srv\\share".
+    is_posix_abs = text.startswith("/")
+    is_drive_abs = len(text) >= 3 and text[1:3] in (":\\", ":/") and text[0].isascii() and text[0].isalpha()
+    is_unc = text.startswith("\\\\") or text.startswith("//")
+    if not (is_posix_abs or is_drive_abs or is_unc):
+        raise ValueError(
+            "TELEGRAM_API_FILES_DIR must be an absolute directory path "
+            "(Unix /path, Windows drive C:\\path, or UNC \\\\server\\share\\path)."
+        )
+    # pathlib round-trip rejects NULs and other path-illegal characters.
+    try:
+        candidate = PureWindowsPath(text) if (is_drive_abs or is_unc) else PurePosixPath(text)
+        if not candidate.is_absolute():
+            raise ValueError
+    except ValueError:
+        raise ValueError(
+            "TELEGRAM_API_FILES_DIR must be an absolute directory path "
+            "(Unix /path, Windows drive C:\\path, or UNC \\\\server\\share\\path)."
+        ) from None
+    normalized = os.path.normpath(text)
+    # Root-level stores are refused on every spelling: POSIX "/" (parts == ("/",)),
+    # a Windows drive root (parts == ()), and a UNC share root (parts == ("\\\\srv\\share",)).
+    # Confinement to such a store would be vacuous.
+    if len(candidate.parts) <= 1:
         raise ValueError(
             "TELEGRAM_API_FILES_DIR must name a concrete directory, not the filesystem root."
         )
-    return resolved
+    return normalized
 
 
 def telegram_files_dir(state_dir: Path) -> Optional[str]:
@@ -244,6 +282,8 @@ def make_settings_save(api):
                       if key in stored and key != "TELEGRAM_PROXY"}
             if "TELEGRAM_PROXY" in stored:
                 values["telegram_proxy_status"] = "Configured" if stored["TELEGRAM_PROXY"] else "Not configured"
+            if stored.get("TELEGRAM_API_BASE"):
+                values["telegram_api_base_status"] = str(stored["TELEGRAM_API_BASE"])
             return JSONResponse(values)
         try:
             data = await request.json()
@@ -271,12 +311,22 @@ def make_settings_save(api):
                 payload.pop("TELEGRAM_PROXY")
             else:
                 payload["TELEGRAM_PROXY"] = proxy
-        if "TELEGRAM_API_BASE" in payload:
-            try:
-                payload["TELEGRAM_API_BASE"] = validate_telegram_api_base(payload["TELEGRAM_API_BASE"])
-            except ValueError as exc:
-                return JSONResponse({"ok": False, "message": str(exc), "error": str(exc)}, status_code=400)
-        if "TELEGRAM_API_FILES_DIR" in payload:
+        if data.get("clear_telegram_api_base") is True:
+            payload["TELEGRAM_API_BASE"] = ""
+        elif "TELEGRAM_API_BASE" in payload:
+            raw = str(payload.get("TELEGRAM_API_BASE") or "").strip()
+            if not raw:
+                # An untouched/emptied text field preserves the saved value;
+                # removal is the separate clear checkbox above.
+                payload.pop("TELEGRAM_API_BASE", None)
+            else:
+                try:
+                    payload["TELEGRAM_API_BASE"] = validate_telegram_api_base(raw)
+                except ValueError as exc:
+                    return JSONResponse({"ok": False, "message": str(exc), "error": str(exc)}, status_code=400)
+        if data.get("clear_telegram_api_files_dir") is True:
+            payload["TELEGRAM_API_FILES_DIR"] = ""
+        elif "TELEGRAM_API_FILES_DIR" in payload:
             try:
                 files_dir = validate_telegram_files_dir(payload["TELEGRAM_API_FILES_DIR"])
             except ValueError as exc:

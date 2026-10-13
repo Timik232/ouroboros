@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import inspect
 import json
 import sys
 import types
@@ -348,3 +349,74 @@ def test_proxy_form_is_masked_preserves_empty_and_explicitly_clears(tmp_path, ho
     assert request({"clear_telegram_proxy": True, "TELEGRAM_PROXY": ""}).status_code == 200
     assert load_settings(tmp_path)["TELEGRAM_PROXY"] == ""
     assert "clear_telegram_proxy" not in load_settings(tmp_path)
+
+
+def test_api_base_form_saves_preserves_empty_and_explicitly_clears(tmp_path):
+    plugin = _load_plugin()
+    handler = plugin._make_settings_save(_RouteApi(tmp_path))
+    base = "http://192.168.1.48:18085"
+    def request(payload=None, method="POST"):
+        return asyncio.run(handler(_RouteRequest(payload, host="127.0.0.1", method=method)))
+    # Save a self-hosted base.
+    assert request({"TELEGRAM_API_BASE": base}).status_code == 200
+    assert load_settings(tmp_path)["TELEGRAM_API_BASE"] == base
+    # GET hydration shows the saved base in the status field.
+    hydrated = request(method="GET")
+    assert b"192.168.1.48:18085" in hydrated.body
+    # An empty field preserves the saved value (no accidental revert).
+    assert request({"TELEGRAM_API_BASE": ""}).status_code == 200
+    assert load_settings(tmp_path)["TELEGRAM_API_BASE"] == base
+    # A fragment/query/base-with-path is rejected, and the stored value stands.
+    for bad in ("https://host#", "https://host?x=1", "https://host/bot", "ftp://host"):
+        refused = request({"TELEGRAM_API_BASE": bad})
+        assert refused.status_code == 400, bad
+        assert load_settings(tmp_path)["TELEGRAM_API_BASE"] == base
+    # Explicit clear checkbox reverts to the cloud default.
+    assert request({"clear_telegram_api_base": True}).status_code == 200
+    assert load_settings(tmp_path)["TELEGRAM_API_BASE"] == ""
+    # Canonicalization: trailing slash and :443-on-https normalize away.
+    assert request({"TELEGRAM_API_BASE": "http://192.168.1.48:18085/"}).status_code == 200
+    assert load_settings(tmp_path)["TELEGRAM_API_BASE"] == base
+
+
+def test_files_dir_form_saves_preserves_empty_and_explicitly_clears(tmp_path):
+    plugin = _load_plugin()
+    handler = plugin._make_settings_save(_RouteApi(tmp_path))
+    store = "/var/lib/telegram-bot-api"
+    def request(payload=None, method="POST"):
+        return asyncio.run(handler(_RouteRequest(payload, host="127.0.0.1", method=method)))
+    assert request({"TELEGRAM_API_FILES_DIR": store}).status_code == 200
+    assert load_settings(tmp_path)["TELEGRAM_API_FILES_DIR"] == store
+    # An empty field preserves the saved value (F3 regression guard).
+    assert request({"TELEGRAM_API_FILES_DIR": ""}).status_code == 200
+    assert load_settings(tmp_path)["TELEGRAM_API_FILES_DIR"] == store
+    # Explicit clear disables the fallback.
+    assert request({"clear_telegram_api_files_dir": True}).status_code == 200
+    assert load_settings(tmp_path)["TELEGRAM_API_FILES_DIR"] == ""
+
+
+def test_form_schema_contains_api_base_and_files_dir_controls():
+    plugin = _load_plugin()
+    source = inspect.getsource(plugin)
+    assert '"name": "TELEGRAM_API_BASE"' in source
+    assert '"name": "clear_telegram_api_base"' in source
+    assert '"name": "TELEGRAM_API_FILES_DIR"' in source
+    assert '"name": "clear_telegram_api_files_dir"' in source
+
+
+def test_files_dir_validator_accepts_native_absolute_paths():
+    plugin = _load_plugin()
+    settings = sys.modules[plugin._make_settings_save.__module__]
+    validate = settings.validate_telegram_files_dir
+    # Unix
+    assert validate("/store") == "/store"
+    assert validate("/store/") == "/store"
+    # Windows drive and UNC spellings.
+    assert validate("C:\\store") == "C:\\store"
+    assert validate("C:/store") == "C:/store"
+    assert validate("\\\\server\\share\\store") == "\\\\server\\share\\store"
+    assert validate("") is None
+    assert validate(None) is None
+    for bad in ("/", "C:\\", "//server/share", "store/path", "not a path!"):
+        with pytest.raises(ValueError):
+            validate(bad)
