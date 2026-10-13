@@ -393,6 +393,9 @@ def test_api_base_form_saves_preserves_empty_and_explicitly_clears(tmp_path):
     # Canonicalization: trailing slash and :443-on-https normalize away.
     assert request({"TELEGRAM_API_BASE": "http://192.168.1.48:18085/"}).status_code == 200
     assert load_settings(tmp_path)["TELEGRAM_API_BASE"] == base
+    # ...including the https default port (no drift between saves).
+    assert request({"TELEGRAM_API_BASE": "https://host.example:443"}).status_code == 200
+    assert load_settings(tmp_path)["TELEGRAM_API_BASE"] == "https://host.example"
 
 
 def test_files_dir_form_saves_preserves_empty_and_explicitly_clears(tmp_path):
