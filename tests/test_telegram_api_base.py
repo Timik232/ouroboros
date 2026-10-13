@@ -172,28 +172,33 @@ def test_download_falls_back_to_disk_absolute_path(tmp_path):
 
 
 def test_download_rejects_unresolved_unc_path_before_any_fs_access(tmp_path):
-    # Lexical confinement must run BEFORE resolve(): a server-controlled UNC
-    # path must be refused by the pure string comparison alone, without
-    # touching an unrelated SMB share.
+    # Lexical confinement must run BEFORE resolve(). On Windows a
+    # server-controlled UNC path (\\\\attacker\\share\\file) is refused by the
+    # pure string comparison alone. On POSIX the same bytes are a relative
+    # name joined UNDER the store, so the lexical check passes; the guard is
+    # then that resolution stays inside the store and the probe fails without
+    # ever touching a network share. Both spellings must raise.
     store = tmp_path / "store"
     store.mkdir(parents=True)
     transport, _ = _fake_server({"file_1.bin": httpx.Response(404, text="not found")})
     c = _client(api_base_url=_BASE, files_dir=str(store))
-    # A syntactically valid UNC path that does not exist and must not be
-    # probed: Path("\\\\attacker\\share\\file") on POSIX lexically starts
-    # with neither the store nor "/", so it is refused before resolve().
-    unc_path = "\\\\attacker.example\\share\\secret.bin"
+    attempts = ["\\\\attacker.example\\share\\secret.bin", "//attacker.example/share/secret.bin"]
 
-    async def run():
+    async def run(raw_path):
         orig = api_mod.httpx.AsyncClient
         api_mod.httpx.AsyncClient = lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"})
         try:
-            return await c._download_bytes(unc_path)
+            return await c._download_bytes(raw_path)
         finally:
             api_mod.httpx.AsyncClient = orig
 
-    with pytest.raises(Exception):
-        asyncio.run(run())
+    for raw_path in attempts:
+        with pytest.raises(Exception):
+            asyncio.run(run(raw_path))
+    # And nothing escaped the store: the only candidate paths ever probed
+    # resolve inside it (no file materialized at any network-style name).
+    assert not any((store / p).exists() for p in attempts)
+    assert list(store.iterdir()) == []
 
 
 def test_download_rejects_absolute_path_outside_store(tmp_path):

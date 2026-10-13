@@ -398,11 +398,17 @@ def test_api_base_form_saves_preserves_empty_and_explicitly_clears(tmp_path):
 def test_files_dir_form_saves_preserves_empty_and_explicitly_clears(tmp_path):
     plugin = _load_plugin()
     handler = plugin._make_settings_save(_RouteApi(tmp_path))
-    store = "/var/lib/telegram-bot-api"
+    # Native absolute path for THIS platform (a POSIX literal would be
+    # rejected at save time on Windows — see the validator tests below).
+    store = str(tmp_path / "telegram-bot-api")
+    (tmp_path / "telegram-bot-api").mkdir()
     def request(payload=None, method="POST"):
         return asyncio.run(handler(_RouteRequest(payload, host="127.0.0.1", method=method)))
     assert request({"TELEGRAM_API_FILES_DIR": store}).status_code == 200
     assert load_settings(tmp_path)["TELEGRAM_API_FILES_DIR"] == store
+    # The persisted value revalidates unchanged on reload (idempotency).
+    settings = sys.modules[plugin._make_settings_save.__module__]
+    assert settings.validate_telegram_files_dir(store) == store
     # An empty field preserves the saved value (F3 regression guard).
     assert request({"TELEGRAM_API_FILES_DIR": ""}).status_code == 200
     assert load_settings(tmp_path)["TELEGRAM_API_FILES_DIR"] == store
@@ -436,3 +442,18 @@ def test_files_dir_validator_accepts_native_absolute_paths():
     for bad in ("/", "C:\\", "//server/share", "store/path", "not a path!"):
         with pytest.raises(ValueError):
             validate(bad)
+    # Root aliases that only normalize down to a root are refused too
+    # ("/tmp/.." -> "/" on POSIX, "C:/store/.." -> "C:\\" on Windows), and an
+    # accepted value revalidates to itself (reload idempotency).
+    if os.name == "posix":
+        for alias in ("/tmp/..", "/tmp/../.."):
+            with pytest.raises(ValueError):
+                validate(alias)
+        accepted = os.path.normpath("/store")
+        assert validate(accepted) == accepted
+    else:
+        for alias in ("C:/store/..", "C:\\store\\..\\.."):
+            with pytest.raises(ValueError):
+                validate(alias)
+        accepted = os.path.normpath("C:\\store")
+        assert validate(accepted) == accepted

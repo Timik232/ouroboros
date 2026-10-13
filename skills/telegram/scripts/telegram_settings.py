@@ -182,18 +182,34 @@ def validate_telegram_files_dir(value: Any) -> Optional[str]:
     text = str(value or "").strip()
     if not text:
         return None
-    # Native absolute spellings: POSIX "/", drive "C:/", UNC "\\\\srv\\share".
-    is_posix_abs = text.startswith("/")
-    is_drive_abs = len(text) >= 3 and text[1:3] in (":\\", ":/") and text[0].isascii() and text[0].isalpha()
-    is_unc = text.startswith("\\\\") or text.startswith("//")
+    if "\x00" in text:
+        raise ValueError(
+            "TELEGRAM_API_FILES_DIR must be an absolute directory path "
+            "(Unix /path, Windows drive C:\\path, or UNC \\\\server\\share\\path) "
+            "in this platform's native spelling."
+        )
+    # Normalize FIRST and classify the normalized spelling: os.path.normpath is
+    # idempotent, so whatever passes once passes unchanged on reload. On
+    # Windows a POSIX spelling normalizes to a single-backslash root that is
+    # neither drive nor UNC and is rejected at save time instead of being
+    # persisted in a form the reload would refuse (round-5 F1).
+    normalized = os.path.normpath(text)
+    is_posix_abs = normalized.startswith("/")
+    is_drive_abs = (
+        len(normalized) >= 3
+        and normalized[1:3] in (":\\", ":/")
+        and normalized[0].isascii()
+        and normalized[0].isalpha()
+    )
+    is_unc = normalized.startswith("\\\\") or normalized.startswith("//")
     if not (is_posix_abs or is_drive_abs or is_unc):
         raise ValueError(
             "TELEGRAM_API_FILES_DIR must be an absolute directory path "
-            "(Unix /path, Windows drive C:\\path, or UNC \\\\server\\share\\path)."
+            "(Unix /path, Windows drive C:\\path, or UNC \\\\server\\share\\path) "
+            "in this platform's native spelling."
         )
-    # pathlib round-trip rejects NULs and other path-illegal characters.
     try:
-        candidate = PureWindowsPath(text) if (is_drive_abs or is_unc) else PurePosixPath(text)
+        candidate = PureWindowsPath(normalized) if (is_drive_abs or is_unc) else PurePosixPath(normalized)
         if not candidate.is_absolute():
             raise ValueError
     except ValueError:
@@ -201,10 +217,9 @@ def validate_telegram_files_dir(value: Any) -> Optional[str]:
             "TELEGRAM_API_FILES_DIR must be an absolute directory path "
             "(Unix /path, Windows drive C:\\path, or UNC \\\\server\\share\\path)."
         ) from None
-    normalized = os.path.normpath(text)
-    # Root-level stores are refused on every spelling: POSIX "/" (parts == ("/",)),
-    # a Windows drive root (parts == ()), and a UNC share root (parts == ("\\\\srv\\share",)).
-    # Confinement to such a store would be vacuous.
+    # Root-level stores are refused on every spelling, including aliases that
+    # only normalize down to a root ("/tmp/..", "C:/store/.."): confinement to
+    # such a store would be vacuous.
     if len(candidate.parts) <= 1:
         raise ValueError(
             "TELEGRAM_API_FILES_DIR must name a concrete directory, not the filesystem root."
