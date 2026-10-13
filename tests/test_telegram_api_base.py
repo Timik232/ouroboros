@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -73,8 +73,8 @@ def test_api_base_invalid(value):
 def test_files_dir_validator():
     assert settings_mod.validate_telegram_files_dir("") is None
     assert settings_mod.validate_telegram_files_dir(None) is None
-    assert settings_mod.validate_telegram_files_dir("/srv/tba") == "/srv/tba"
-    assert settings_mod.validate_telegram_files_dir("/srv/tba/") == "/srv/tba"
+    assert settings_mod.validate_telegram_files_dir("/srv/tba") == os.path.normpath("/srv/tba")
+    assert settings_mod.validate_telegram_files_dir("/srv/tba/") == os.path.normpath("/srv/tba")
     with pytest.raises(ValueError):
         settings_mod.validate_telegram_files_dir("relative/dir")
 

@@ -144,7 +144,12 @@ def validate_telegram_api_base(value: Any) -> str:
             and not url.username and not url.password
         )
         if valid:
-            origin = f"{url.scheme}://{url.host}"
+            host = url.host or ""
+            # httpx.URL.host returns IPv6 literals WITHOUT brackets; rebuild
+            # the origin with them so http://[::1]:8081 round-trips through
+            # settings persistence and client revalidation.
+            bracketed = f"[{host}]" if ":" in host else host
+            origin = f"{url.scheme}://{bracketed}"
             if url.port is not None:
                 origin += f":{url.port}"
             canonical = origin

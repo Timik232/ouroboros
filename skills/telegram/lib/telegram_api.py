@@ -575,9 +575,12 @@ class TelegramClient:
         self.trust_env = bool(trust_env)
         if not self.token:
             raise ValueError("TELEGRAM_BOT_TOKEN is missing")
-        # An explicit proxy replaces ambient proxies for these calls only. The target stays
-        # https://api.telegram.org, so TLS runs end to end through the tunnel: the proxy
-        # sees the host, never the token-bearing path, and redirects are never followed.
+        # An explicit proxy replaces ambient proxies for these calls only. With the
+        # default base the target stays https://api.telegram.org, so TLS runs end to
+        # end through the tunnel: the proxy sees the host, never the token-bearing
+        # path, and redirects are never followed. A custom TELEGRAM_API_BASE origin
+        # replaces the target; transport security is then whatever that origin
+        # provides (http:// bases are unencrypted by design of the deployer).
         self.proxy = _telegram_proxy(proxy)
         # Self-hosted telegram-bot-api server support: without an override the
         # endpoints are the cloud Bot API. A custom base (http/https, no path

@@ -116,7 +116,10 @@ To route Bot API traffic through a self-hosted `telegram-bot-api` server
 instead of `https://api.telegram.org`, set `TELEGRAM_API_BASE` to its root URL
 (`scheme://host[:port]`, no path, query or fragment; e.g.
 `http://192.168.1.48:8081`). All Bot API calls — polling, sends, downloads,
-notifications, and the companion/menu egress — go to that base. A local server
+notifications, and the companion/menu egress — go to that base; transport
+security is whatever the chosen origin provides, so an `http://` base is
+unencrypted between this installation and the server (fine on a trusted LAN,
+not fine over the internet). A local server
 serves downloaded files from its own disk instead of HTTP (tdlib/
 telegram-bot-api#26): point `TELEGRAM_API_FILES_DIR` at the server's file
 store (an absolute directory path shared with this installation, e.g. via a

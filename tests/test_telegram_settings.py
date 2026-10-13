@@ -4,6 +4,7 @@ import asyncio
 import importlib.util
 import inspect
 import json
+import os
 import sys
 import types
 from pathlib import Path
@@ -351,6 +352,21 @@ def test_proxy_form_is_masked_preserves_empty_and_explicitly_clears(tmp_path, ho
     assert "clear_telegram_proxy" not in load_settings(tmp_path)
 
 
+def test_api_base_validator_canonicalizes_ipv6_with_brackets():
+    plugin = _load_plugin()
+    settings = sys.modules[plugin._make_settings_save.__module__]
+    validate = settings.validate_telegram_api_base
+    # IPv6 literals keep their brackets through canonicalization so the
+    # origin round-trips settings persistence and client revalidation.
+    assert validate("http://[::1]:8081") == "http://[::1]:8081"
+    assert validate("https://[2001:db8::1]:8443") == "https://[2001:db8::1]:8443"
+    # ...and the canonical form revalidates (no drift on reload).
+    assert validate(validate("http://[::1]:8081")) == "http://[::1]:8081"
+    # Bracket-less IPv6 with a port is malformed and rejected.
+    with pytest.raises(ValueError):
+        validate("http://::1:8081")
+
+
 def test_api_base_form_saves_preserves_empty_and_explicitly_clears(tmp_path):
     plugin = _load_plugin()
     handler = plugin._make_settings_save(_RouteApi(tmp_path))
@@ -412,7 +428,7 @@ def test_files_dir_validator_accepts_native_absolute_paths():
     assert validate("/store") == "/store"
     assert validate("/store/") == "/store"
     # Windows drive and UNC spellings.
-    assert validate("C:\\store") == "C:\\store"
+    assert validate("C:\\store") == os.path.normpath("C:\\store")
     assert validate("C:/store") == "C:/store"
     assert validate("\\\\server\\share\\store") == "\\\\server\\share\\store"
     assert validate("") is None
