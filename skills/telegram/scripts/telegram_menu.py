@@ -18,7 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from platform_support import fsync_directory, path_is_link_or_reparse
-from telegram_settings import telegram_proxy
+from telegram_settings import telegram_api_base, telegram_proxy
 
 
 _API_ROOT = "https://api.telegram.org"

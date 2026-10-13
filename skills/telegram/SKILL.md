@@ -112,6 +112,21 @@ to keep a saved value, or use **Clear saved Telegram proxy** to remove it.
 Disable and re-enable the skill after changing the proxy so its poller and
 companion also pick up the change. No additional Secrets grant is needed.
 
+To route Bot API traffic through a self-hosted `telegram-bot-api` server
+instead of `https://api.telegram.org`, set `TELEGRAM_API_BASE` to its root URL
+(`scheme://host[:port]`, no path, query or fragment; e.g.
+`http://192.168.1.48:8081`). All Bot API calls — polling, sends, downloads,
+notifications, and the companion/menu egress — go to that base. A local server
+serves downloaded files from its own disk instead of HTTP (tdlib/
+telegram-bot-api#26): point `TELEGRAM_API_FILES_DIR` at the server's file
+store (an absolute directory path shared with this installation, e.g. via a
+bind mount; not the filesystem root) and file downloads fall back to reading
+from that store, confined to it. Disable and re-enable the skill after
+changing either setting. Both settings live in this skill's Settings form;
+invalid values are rejected with an error naming the key. With neither set,
+behavior is unchanged: the default `https://api.telegram.org` and HTTP
+downloads.
+
 The Bot API stays `https://api.telegram.org` with TLS through the proxy and no
 redirects. Proxy credentials follow the selected protocol: HTTP and SOCKS do
 not encrypt the connection to the proxy; HTTPS does. Invalid proxy settings

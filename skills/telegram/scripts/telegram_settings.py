@@ -150,13 +150,23 @@ def telegram_api_base(state_dir: Path) -> str:
 
 
 def validate_telegram_files_dir(value: Any) -> Optional[str]:
-    """Parse TELEGRAM_API_FILES_DIR: an absolute directory path or empty."""
+    """Parse TELEGRAM_API_FILES_DIR: an absolute directory path or empty.
+
+    "/" is rejected: it would make the disk-fallback confinement vacuous (every
+    resolvable path lies under "/"), letting a malicious server response name
+    any readable file for exfiltration into the owner chat.
+    """
     text = str(value or "").strip()
     if not text:
         return None
     if not text.startswith("/"):
         raise ValueError("TELEGRAM_API_FILES_DIR must be an absolute directory path.")
-    return text.rstrip("/") or "/"
+    resolved = text.rstrip("/") or "/"
+    if resolved == "/":
+        raise ValueError(
+            "TELEGRAM_API_FILES_DIR must name a concrete directory, not the filesystem root."
+        )
+    return resolved
 
 
 def telegram_files_dir(state_dir: Path) -> Optional[str]:
@@ -261,6 +271,20 @@ def make_settings_save(api):
                 payload.pop("TELEGRAM_PROXY")
             else:
                 payload["TELEGRAM_PROXY"] = proxy
+        if "TELEGRAM_API_BASE" in payload:
+            try:
+                payload["TELEGRAM_API_BASE"] = validate_telegram_api_base(payload["TELEGRAM_API_BASE"])
+            except ValueError as exc:
+                return JSONResponse({"ok": False, "message": str(exc), "error": str(exc)}, status_code=400)
+        if "TELEGRAM_API_FILES_DIR" in payload:
+            try:
+                files_dir = validate_telegram_files_dir(payload["TELEGRAM_API_FILES_DIR"])
+            except ValueError as exc:
+                return JSONResponse({"ok": False, "message": str(exc), "error": str(exc)}, status_code=400)
+            if files_dir is None:
+                payload.pop("TELEGRAM_API_FILES_DIR")
+            else:
+                payload["TELEGRAM_API_FILES_DIR"] = files_dir
         owner_ignored = False
         if "TELEGRAM_CHAT_ID" in payload and not request_may_change_owner(request):
             payload.pop("TELEGRAM_CHAT_ID", None)
@@ -310,6 +334,10 @@ __all__ = [
     "miniapp_enabled",
     "owner_chat_id",
     "request_may_change_owner",
+    "telegram_api_base",
+    "telegram_files_dir",
     "telegram_proxy",
+    "validate_telegram_api_base",
+    "validate_telegram_files_dir",
     "validate_telegram_proxy",
 ]

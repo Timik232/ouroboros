@@ -149,6 +149,69 @@ def test_download_falls_back_to_disk(tmp_path):
     assert asyncio.run(run()) == payload
 
 
+def test_download_falls_back_to_disk_absolute_path(tmp_path):
+    # A local telegram-bot-api returns ABSOLUTE file_path values on its own
+    # disk (e.g. "/srv/tba/documents/file_1.bin"); files_dir points at the
+    # same store. The fallback must honor the absolute path.
+    store = tmp_path / "store"
+    (store / "documents").mkdir(parents=True)
+    payload = b"absolute-path-bytes"
+    (store / "documents" / "file_1.bin").write_bytes(payload)
+    transport, _ = _fake_server({"file_1.bin": httpx.Response(404, text="not found")})
+    c = _client(api_base_url=_BASE, files_dir=str(store))
+
+    async def run():
+        orig = api_mod.httpx.AsyncClient
+        api_mod.httpx.AsyncClient = lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"})
+        try:
+            return await c._download_bytes(str(store / "documents" / "file_1.bin"))
+        finally:
+            api_mod.httpx.AsyncClient = orig
+
+    assert asyncio.run(run()) == payload
+
+
+def test_download_rejects_absolute_path_outside_store(tmp_path):
+    # A file_path outside files_dir must not be readable, even absolute.
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    secret = tmp_path / "secret.bin"
+    secret.write_bytes(b"secret")
+    transport, _ = _fake_server({"file_1.bin": httpx.Response(404, text="not found")})
+    c = _client(api_base_url=_BASE, files_dir=str(store))
+
+    async def run():
+        orig = api_mod.httpx.AsyncClient
+        api_mod.httpx.AsyncClient = lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"})
+        try:
+            return await c._download_bytes(str(secret))
+        finally:
+            api_mod.httpx.AsyncClient = orig
+
+    with pytest.raises(Exception):
+        asyncio.run(run())
+
+
+def test_download_oversize_file_raises(tmp_path):
+    # st_size pre-check must reject before reading a >10 MiB file.
+    store = tmp_path / "store"
+    (store / "documents").mkdir(parents=True)
+    (store / "documents" / "file_1.bin").write_bytes(b"x" * (10 * 1024 * 1024 + 1))
+    transport, _ = _fake_server({"file_1.bin": httpx.Response(404, text="not found")})
+    c = _client(api_base_url=_BASE, files_dir=str(store))
+
+    async def run():
+        orig = api_mod.httpx.AsyncClient
+        api_mod.httpx.AsyncClient = lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"})
+        try:
+            return await c._download_bytes("documents/file_1.bin")
+        finally:
+            api_mod.httpx.AsyncClient = orig
+
+    with pytest.raises(RuntimeError, match="10 MiB"):
+        asyncio.run(run())
+
+
 def test_download_without_files_dir_raises(tmp_path):
     transport, _ = _fake_server({"file_1.bin": httpx.Response(404, text="not found")})
     c = _client(api_base_url=_BASE)  # no files_dir

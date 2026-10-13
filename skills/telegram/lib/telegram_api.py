@@ -678,19 +678,25 @@ class TelegramClient:
         A local telegram-bot-api returns absolute file_path values on its own
         disk and does not serve them over HTTP (tdlib/telegram-bot-api#26);
         TELEGRAM_API_FILES_DIR points at the store shared with the server.
-        Only byte-exact absolute paths are honored: file_path comes from the
-        server's own getFile response, but stays defensive against traversal.
+        Absolute paths are resolved as-is (the documented server behavior);
+        anything else is joined under the store. Both are confined to the
+        store via resolve().relative_to(): file_path comes from the server's
+        own getFile response, but the check stays defensive against traversal.
         """
         if not self.files_dir:
             raise cause
-        clean = str(file_path or "").lstrip("/")
-        candidate = pathlib.Path(self.files_dir) / clean
+        store = pathlib.Path(self.files_dir).resolve()
+        raw = pathlib.Path(str(file_path or ""))
+        candidate = raw if raw.is_absolute() else store / raw
         try:
-            candidate.resolve().relative_to(pathlib.Path(self.files_dir).resolve())
+            candidate.resolve().relative_to(store)
         except ValueError:
             raise cause from None
         if not candidate.is_file():
             raise cause from None
+        size = candidate.stat().st_size
+        if size > _MAX_TELEGRAM_DOWNLOAD_BYTES:
+            raise RuntimeError("Telegram file exceeds the 10 MiB download limit.") from cause
         data = candidate.read_bytes()
         if len(data) > _MAX_TELEGRAM_DOWNLOAD_BYTES:
             raise RuntimeError("Telegram file exceeds the 10 MiB download limit.") from cause
