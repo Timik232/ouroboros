@@ -430,16 +430,29 @@ def test_files_dir_validator_accepts_native_absolute_paths():
     plugin = _load_plugin()
     settings = sys.modules[plugin._make_settings_save.__module__]
     validate = settings.validate_telegram_files_dir
-    # Unix
-    assert validate("/store") == os.path.normpath("/store")
-    assert validate("/store/") == os.path.normpath("/store")
-    # Windows drive and UNC spellings.
-    assert validate("C:\\store") == os.path.normpath("C:\\store")
-    assert validate("C:/store") == "C:/store"
-    assert validate("\\\\server\\share\\store") == "\\\\server\\share\\store"
+    # Only spellings NATIVE to the running platform are accepted (round-6 A1):
+    # on POSIX a Windows drive/UNC spelling is a relative name to pathlib and
+    # would silently resolve against the working directory, so it is refused;
+    # on Windows a POSIX spelling normalizes to a backslash root and is
+    # refused as well.
+    if os.name == "posix":
+        assert validate("/store") == "/store"
+        assert validate("/store/") == "/store"
+        for foreign in ("C:\\store", "C:/store", "\\\\server\\share\\store"):
+            with pytest.raises(ValueError):
+                validate(foreign)
+    else:
+        assert validate("C:\\store") == "C:\\store"
+        assert validate("C:/store") == "C:\\store"
+        assert validate("\\\\server\\share\\store") == "\\\\server\\share\\store"
+        for foreign in ("/store", "/store/"):
+            with pytest.raises(ValueError):
+                validate(foreign)
     assert validate("") is None
     assert validate(None) is None
     for bad in ("/", "C:\\", "//server/share", "store/path", "not a path!"):
+        if os.name == "posix" and bad == "//server/share":
+            continue  # legal double-slash POSIX path, not a foreign spelling
         with pytest.raises(ValueError):
             validate(bad)
     # Root aliases that only normalize down to a root are refused too

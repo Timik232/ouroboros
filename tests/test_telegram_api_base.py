@@ -73,8 +73,11 @@ def test_api_base_invalid(value):
 def test_files_dir_validator():
     assert settings_mod.validate_telegram_files_dir("") is None
     assert settings_mod.validate_telegram_files_dir(None) is None
-    assert settings_mod.validate_telegram_files_dir("/srv/tba") == os.path.normpath("/srv/tba")
-    assert settings_mod.validate_telegram_files_dir("/srv/tba/") == os.path.normpath("/srv/tba")
+    # A native absolute spelling for THIS platform; the trailing-slash form
+    # normalizes to the same value.
+    native = os.path.normpath(os.path.join(os.path.abspath(os.sep), "srv", "tba"))
+    assert settings_mod.validate_telegram_files_dir(native) == native
+    assert settings_mod.validate_telegram_files_dir(native + os.sep) == native
     with pytest.raises(ValueError):
         settings_mod.validate_telegram_files_dir("relative/dir")
 
@@ -89,10 +92,12 @@ def test_default_endpoints_unchanged():
 
 
 def test_custom_endpoints():
-    c = _client(api_base_url=_BASE, files_dir="/srv/tba")
+    # Native absolute spelling for THIS platform.
+    native_store = os.path.normpath(os.path.join(os.path.abspath(os.sep), "srv", "tba"))
+    c = _client(api_base_url=_BASE, files_dir=native_store)
     assert c.api_base == f"{_BASE}/bot{_TOKEN}"
     assert c.file_base == f"{_BASE}/file/bot{_TOKEN}"
-    assert c.files_dir == os.path.normpath("/srv/tba")
+    assert c.files_dir == native_store
 
 
 # --- live call routing + disk fallback ----------------------------------------
@@ -172,33 +177,55 @@ def test_download_falls_back_to_disk_absolute_path(tmp_path):
 
 
 def test_download_rejects_unresolved_unc_path_before_any_fs_access(tmp_path):
-    # Lexical confinement must run BEFORE resolve(). On Windows a
-    # server-controlled UNC path (\\\\attacker\\share\\file) is refused by the
-    # pure string comparison alone. On POSIX the same bytes are a relative
-    # name joined UNDER the store, so the lexical check passes; the guard is
-    # then that resolution stays inside the store and the probe fails without
-    # ever touching a network share. Both spellings must raise.
+    # Lexical confinement must run BEFORE resolve(), and the test itself must
+    # stay hermetic: no exists()/stat() on absolute UNC paths (on Windows the
+    # join discards the store and could trigger DNS/SMB traffic). Instead we
+    # spy on the filesystem entry points and assert every probe stayed inside
+    # the store directory.
     store = tmp_path / "store"
     store.mkdir(parents=True)
     transport, _ = _fake_server({"file_1.bin": httpx.Response(404, text="not found")})
     c = _client(api_base_url=_BASE, files_dir=str(store))
     attempts = ["\\\\attacker.example\\share\\secret.bin", "//attacker.example/share/secret.bin"]
+    # pathlib.Path cannot be subclassed (its __new__ swaps in the concrete
+    # flavour class), so observe probes by patching the concrete class's
+    # methods instead. Scoped to this test and restored in finally.
+    import pathlib as _pl
+    concrete = type(_pl.Path("/"))
+    probed: list = []
+    originals = {}
 
-    async def run(raw_path):
-        orig = api_mod.httpx.AsyncClient
-        api_mod.httpx.AsyncClient = lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"})
-        try:
-            return await c._download_bytes(raw_path)
-        finally:
-            api_mod.httpx.AsyncClient = orig
+    def _spy(name):
+        real = getattr(concrete, name)
 
-    for raw_path in attempts:
-        with pytest.raises(Exception):
-            asyncio.run(run(raw_path))
-    # And nothing escaped the store: the only candidate paths ever probed
-    # resolve inside it (no file materialized at any network-style name).
-    assert not any((store / p).exists() for p in attempts)
-    assert list(store.iterdir()) == []
+        def wrapper(self, *args, **kwargs):
+            probed.append((name, str(self)))
+            return real(self, *args, **kwargs)
+
+        return real, wrapper
+
+    for name in ("resolve", "is_file", "stat"):
+        originals[name], wrapper = _spy(name)
+        setattr(concrete, name, wrapper)
+    try:
+        for raw_path in attempts:
+            async def run(rp=raw_path):
+                orig = api_mod.httpx.AsyncClient
+                api_mod.httpx.AsyncClient = lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"})
+                try:
+                    return await c._download_bytes(rp)
+                finally:
+                    api_mod.httpx.AsyncClient = orig
+            with pytest.raises(Exception):
+                asyncio.run(run())
+    finally:
+        for name, real in originals.items():
+            setattr(concrete, name, real)
+    # Every filesystem probe stayed inside the store (no network-style path
+    # was ever resolved, stated or opened).
+    assert probed, "expected at least one filesystem probe to be observed"
+    for op, path in probed:
+        assert path.startswith(str(store)), (op, path)
 
 
 def test_download_rejects_absolute_path_outside_store(tmp_path):
