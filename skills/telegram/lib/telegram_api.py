@@ -3,12 +3,17 @@ from __future__ import annotations
 import base64
 import html as html_lib
 import mimetypes
+import pathlib
 import re
 from typing import Any, BinaryIO, Dict, Optional
 
 import httpx
 
-from ..scripts.telegram_settings import validate_telegram_proxy as _telegram_proxy
+from ..scripts.telegram_settings import (
+    validate_telegram_api_base as _telegram_api_base,
+    validate_telegram_files_dir as _telegram_files_dir,
+    validate_telegram_proxy as _telegram_proxy,
+)
 from .telegram_i18n import Index
 
 # Telegram hard-caps a single sendMessage at 4096 UTF-16 code units.
@@ -564,7 +569,8 @@ def _telegram_html_to_plain(value: str) -> str:
 
 
 class TelegramClient:
-    def __init__(self, token: str, *, trust_env: bool = False, proxy: Optional[str] = None):
+    def __init__(self, token: str, *, trust_env: bool = False, proxy: Optional[str] = None,
+                 api_base_url: Optional[str] = None, files_dir: Optional[str] = None):
         self.token = str(token or "").strip()
         self.trust_env = bool(trust_env)
         if not self.token:
@@ -573,8 +579,17 @@ class TelegramClient:
         # https://api.telegram.org, so TLS runs end to end through the tunnel: the proxy
         # sees the host, never the token-bearing path, and redirects are never followed.
         self.proxy = _telegram_proxy(proxy)
-        self.api_base = f"https://api.telegram.org/bot{self.token}"
-        self.file_base = f"https://api.telegram.org/file/bot{self.token}"
+        # Self-hosted telegram-bot-api server support: without an override the
+        # endpoints are the cloud Bot API. A custom base (http/https, no path
+        # segments beyond an optional trailing slash) keeps the identical Bot
+        # API surface but serves it from the operator's own server. files_dir
+        # enables disk fallback for downloads: a local server returns absolute
+        # file_path values on its own disk and does not serve /file/bot.../...
+        # over HTTP (tdlib/telegram-bot-api#26).
+        base = _telegram_api_base(api_base_url)
+        self.api_base = f"{base}/bot{self.token}"
+        self.file_base = f"{base}/file/bot{self.token}"
+        self.files_dir = _telegram_files_dir(files_dir)
 
     async def call(self, method: str, *, data: Optional[dict] = None, files: Optional[dict] = None, timeout: int = 30) -> Dict[str, Any]:
         method_text = str(method or "")
@@ -653,7 +668,33 @@ class TelegramClient:
             raise RuntimeError(
                 f"Telegram file download transport failed ({type(exc).__name__})."
             ) from None
+        except RuntimeError as exc:
+            content = self._read_file_from_disk(file_path, exc)
         return bytes(content)
+
+    def _read_file_from_disk(self, file_path: str, cause: Exception) -> bytes:
+        """Disk fallback for a self-hosted server's file store.
+
+        A local telegram-bot-api returns absolute file_path values on its own
+        disk and does not serve them over HTTP (tdlib/telegram-bot-api#26);
+        TELEGRAM_API_FILES_DIR points at the store shared with the server.
+        Only byte-exact absolute paths are honored: file_path comes from the
+        server's own getFile response, but stays defensive against traversal.
+        """
+        if not self.files_dir:
+            raise cause
+        clean = str(file_path or "").lstrip("/")
+        candidate = pathlib.Path(self.files_dir) / clean
+        try:
+            candidate.resolve().relative_to(pathlib.Path(self.files_dir).resolve())
+        except ValueError:
+            raise cause from None
+        if not candidate.is_file():
+            raise cause from None
+        data = candidate.read_bytes()
+        if len(data) > _MAX_TELEGRAM_DOWNLOAD_BYTES:
+            raise RuntimeError("Telegram file exceeds the 10 MiB download limit.") from cause
+        return data
 
     async def get_updates(self, offset: int) -> list[dict]:
         payload = await self.call("getUpdates", data={"timeout": 20, "offset": offset}, timeout=25)

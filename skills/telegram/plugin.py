@@ -41,6 +41,8 @@ from .scripts.telegram_settings import (
     merge_settings,
     make_settings_save as _make_settings_save,
     telegram_proxy,
+    telegram_api_base,
+    telegram_files_dir,
 )
 
 # Decided once in the server process: a proxy-routed install keeps its only egress, every
@@ -55,8 +57,14 @@ _HONOR_ENV_PROXIES = (not in_worker_process()) and env_proxies_configured()
 def _telegram_client(api) -> TelegramClient:
     """Build each bridge client with the granted token and skill-local proxy."""
     granted = api.get_settings(["TELEGRAM_BOT_TOKEN"])
-    return TelegramClient(granted.get("TELEGRAM_BOT_TOKEN", ""), trust_env=_HONOR_ENV_PROXIES,
-                          proxy=telegram_proxy(pathlib.Path(api.get_state_dir())))
+    state_dir = pathlib.Path(api.get_state_dir())
+    return TelegramClient(
+        granted.get("TELEGRAM_BOT_TOKEN", ""),
+        trust_env=_HONOR_ENV_PROXIES,
+        proxy=telegram_proxy(state_dir),
+        api_base_url=telegram_api_base(state_dir),
+        files_dir=telegram_files_dir(state_dir),
+    )
 
 _SLASH_COMMAND_RE = re.compile(r"^\s*/[A-Za-z]")
 

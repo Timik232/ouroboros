@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 from starlette.responses import JSONResponse
@@ -114,6 +114,56 @@ def telegram_proxy(state_dir: Path) -> str | None:
     return validate_telegram_proxy(load_settings(state_dir).get("TELEGRAM_PROXY"))
 
 
+def validate_telegram_api_base(value: Any) -> str:
+    """Parse TELEGRAM_API_BASE (self-hosted Bot API server) without credentials.
+
+    Accepts http/https scheme://host[:port] with no path beyond an optional
+    trailing slash; anything else is rejected so the token-bearing URL is
+    never silently assembled from a malformed base.
+    """
+    text = str(value or "").strip().rstrip("/")
+    if not text:
+        return "https://api.telegram.org"
+    try:
+        url = httpx.URL(text)
+        valid = (
+            url.scheme in ("http", "https")
+            and bool(url.host)
+            and (url.port is None or 0 < url.port <= 65535)
+            and (url.raw_path in (b"/", b"") or url.raw_path == b"")
+            and not url.query and not url.fragment
+            and not url.username and not url.password
+        )
+    except Exception:
+        valid = False
+    if not valid:
+        raise ValueError(
+            "TELEGRAM_API_BASE must be http(s)://host[:port] with no path, "
+            "query, fragment or credentials."
+        )
+    return text
+
+
+def telegram_api_base(state_dir: Path) -> str:
+    """The Bot API base URL setting; defaults to the cloud endpoint."""
+    return validate_telegram_api_base(load_settings(state_dir).get("TELEGRAM_API_BASE"))
+
+
+def validate_telegram_files_dir(value: Any) -> Optional[str]:
+    """Parse TELEGRAM_API_FILES_DIR: an absolute directory path or empty."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not text.startswith("/"):
+        raise ValueError("TELEGRAM_API_FILES_DIR must be an absolute directory path.")
+    return text.rstrip("/") or "/"
+
+
+def telegram_files_dir(state_dir: Path) -> Optional[str]:
+    """The local server file store; None keeps HTTP-only downloads."""
+    return validate_telegram_files_dir(load_settings(state_dir).get("TELEGRAM_API_FILES_DIR"))
+
+
 def miniapp_enabled(state_dir: Path) -> bool:
     raw = str(load_settings(state_dir).get("TELEGRAM_MINIAPP_ENABLED") or "on").strip().lower()
     return raw in _TRUE
@@ -167,6 +217,7 @@ _SETTINGS_FORM_KEYS = (
     "TELEGRAM_COMMAND_MODE", "TELEGRAM_SILENT_MODE",
     "TELEGRAM_SUBAGENT_CARDS", "TELEGRAM_MIRROR_PROGRESS", "TELEGRAM_NOTIFY_TASKS",
     "TELEGRAM_NOTIFY_BUDGET", "TELEGRAM_MINIAPP_ENABLED", "TELEGRAM_PROXY",
+    "TELEGRAM_API_BASE", "TELEGRAM_API_FILES_DIR",
 )
 
 def make_settings_save(api):
