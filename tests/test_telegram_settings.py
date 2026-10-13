@@ -425,8 +425,8 @@ def test_files_dir_validator_accepts_native_absolute_paths():
     settings = sys.modules[plugin._make_settings_save.__module__]
     validate = settings.validate_telegram_files_dir
     # Unix
-    assert validate("/store") == "/store"
-    assert validate("/store/") == "/store"
+    assert validate("/store") == os.path.normpath("/store")
+    assert validate("/store/") == os.path.normpath("/store")
     # Windows drive and UNC spellings.
     assert validate("C:\\store") == os.path.normpath("C:\\store")
     assert validate("C:/store") == "C:/store"

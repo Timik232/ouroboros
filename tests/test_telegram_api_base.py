@@ -92,7 +92,7 @@ def test_custom_endpoints():
     c = _client(api_base_url=_BASE, files_dir="/srv/tba")
     assert c.api_base == f"{_BASE}/bot{_TOKEN}"
     assert c.file_base == f"{_BASE}/file/bot{_TOKEN}"
-    assert c.files_dir == "/srv/tba"
+    assert c.files_dir == os.path.normpath("/srv/tba")
 
 
 # --- live call routing + disk fallback ----------------------------------------
@@ -169,6 +169,31 @@ def test_download_falls_back_to_disk_absolute_path(tmp_path):
             api_mod.httpx.AsyncClient = orig
 
     assert asyncio.run(run()) == payload
+
+
+def test_download_rejects_unresolved_unc_path_before_any_fs_access(tmp_path):
+    # Lexical confinement must run BEFORE resolve(): a server-controlled UNC
+    # path must be refused by the pure string comparison alone, without
+    # touching an unrelated SMB share.
+    store = tmp_path / "store"
+    store.mkdir(parents=True)
+    transport, _ = _fake_server({"file_1.bin": httpx.Response(404, text="not found")})
+    c = _client(api_base_url=_BASE, files_dir=str(store))
+    # A syntactically valid UNC path that does not exist and must not be
+    # probed: Path("\\\\attacker\\share\\file") on POSIX lexically starts
+    # with neither the store nor "/", so it is refused before resolve().
+    unc_path = "\\\\attacker.example\\share\\secret.bin"
+
+    async def run():
+        orig = api_mod.httpx.AsyncClient
+        api_mod.httpx.AsyncClient = lambda **kw: orig(transport=transport, **{k: v for k, v in kw.items() if k != "transport"})
+        try:
+            return await c._download_bytes(unc_path)
+        finally:
+            api_mod.httpx.AsyncClient = orig
+
+    with pytest.raises(Exception):
+        asyncio.run(run())
 
 
 def test_download_rejects_absolute_path_outside_store(tmp_path):

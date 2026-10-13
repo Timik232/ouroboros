@@ -692,6 +692,12 @@ class TelegramClient:
         raw = pathlib.Path(str(file_path or ""))
         candidate = raw if raw.is_absolute() else store / raw
         try:
+            # Lexical confinement FIRST: Path.relative_to is a pure string
+            # comparison with no filesystem access, so a server-controlled
+            # UNC path (\\server\share\...) is refused before resolve() could
+            # touch an unrelated SMB share. Only lexically-contained paths
+            # are then resolved (symlink defense) and re-confined.
+            candidate.relative_to(store)
             candidate.resolve().relative_to(store)
         except ValueError:
             raise cause from None

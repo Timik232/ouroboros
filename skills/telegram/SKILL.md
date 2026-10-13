@@ -130,8 +130,11 @@ invalid values are rejected with an error naming the key. With neither set,
 behavior is unchanged: the default `https://api.telegram.org` and HTTP
 downloads.
 
-The Bot API stays `https://api.telegram.org` with TLS through the proxy and no
-redirects. Proxy credentials follow the selected protocol: HTTP and SOCKS do
+With the default base the Bot API stays `https://api.telegram.org` with TLS
+through the proxy and no redirects; a custom `TELEGRAM_API_BASE` origin
+replaces the target, and transport security is then whatever that origin
+provides (see above). Proxy credentials follow the selected protocol: HTTP and
+SOCKS do
 not encrypt the connection to the proxy; HTTPS does. Invalid proxy settings
 produce an error naming the key without its value. With no skill proxy, the
 bridge retains its existing direct/ambient-proxy behavior and the companion's
