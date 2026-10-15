@@ -1,7 +1,7 @@
 ---
 name: telegram
 description: Owner-only Telegram text bridge and Mini App gateway for the existing Ouroboros interface.
-version: 1.2.13
+version: 1.2.14
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -122,9 +122,12 @@ unencrypted between this installation and the server (fine on a trusted LAN,
 not fine over the internet). A local server
 serves downloaded files from its own disk instead of HTTP (tdlib/
 telegram-bot-api#26): point `TELEGRAM_API_FILES_DIR` at the server's file
-store (an absolute directory path shared with this installation, e.g. via a
-bind mount; not the filesystem root) and file downloads fall back to reading
-from that store, confined to it. Disable and re-enable the skill after
+store. **The store must be shared by path**: the directory is mounted (bind
+mount/volume) at the *same absolute path* for both the server and this
+installation, so the absolute `file_path` the server returns in `getFile` is
+directly readable here and stays confined to the store (not the filesystem
+root). File downloads fall back to reading from that store. Disable and
+re-enable the skill after
 changing either setting. Both settings live in this skill's Settings form;
 invalid values are rejected with an error naming the key. With neither set,
 behavior is unchanged: the default `https://api.telegram.org` and HTTP
